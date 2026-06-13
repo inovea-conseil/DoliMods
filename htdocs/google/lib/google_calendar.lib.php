@@ -456,7 +456,22 @@ function createEvent($client, $object, $login = 'primary')
 	try {
 		$service = new Google_Service_Calendar($client['client']);
 
-		$createdEvent = $service->events->insert($login, $event);
+		// Génère un lien Google Meet pour les rendez-vous (AC_RDV) afin que des outils de
+		// transcription type Fireflies puissent rejoindre la visio et récupérer le compte-rendu.
+		$optParams = array();
+		if (isset($object->type_code) && $object->type_code == 'AC_RDV') {
+			$conferenceData = new Google_Service_Calendar_ConferenceData();
+			$createRequest = new Google_Service_Calendar_CreateConferenceRequest();
+			$createRequest->setRequestId('dolibarr-'.$object->id.'-'.dol_print_date(dol_now(), '%Y%m%d%H%M%S'));
+			$solutionKey = new Google_Service_Calendar_ConferenceSolutionKey();
+			$solutionKey->setType('hangoutsMeet');
+			$createRequest->setConferenceSolutionKey($solutionKey);
+			$conferenceData->setCreateRequest($createRequest);
+			$event->setConferenceData($conferenceData);
+			$optParams['conferenceDataVersion'] = 1;	// indispensable, sinon conferenceData est ignoré
+		}
+
+		$createdEvent = $service->events->insert($login, $event, $optParams);
 
 		$ret=$createdEvent->getId();
 		dol_syslog("createEvent Id=".$ret, LOG_DEBUG);
@@ -606,7 +621,25 @@ function updateEvent($client, $eventId, $object, $login = 'primary', $service = 
 
 		dol_syslog("updateEvent for login=".$login.", id=".$neweventid.", label=".$object->label.", startTime=".$startTime.", endTime=".$endTime, LOG_DEBUG);
 
-		$updatedEvent = $service->events->update($login, $neweventid, $event);
+		// Préserve un lien Google Meet pour les rendez-vous (AC_RDV) : si l'événement n'en a pas
+		// encore, on en demande la création. conferenceDataVersion=1 est requis dans tous les cas
+		// pour ne pas effacer une visio déjà présente lors de la mise à jour.
+		$updateParams = array('conferenceDataVersion' => 1);
+		if (isset($object->type_code) && $object->type_code == 'AC_RDV') {
+			$existingConf = $event->getConferenceData();
+			if (empty($existingConf) || empty($existingConf->getConferenceId())) {
+				$conferenceData = new Google_Service_Calendar_ConferenceData();
+				$createRequest = new Google_Service_Calendar_CreateConferenceRequest();
+				$createRequest->setRequestId('dolibarr-'.$object->id.'-'.dol_print_date(dol_now(), '%Y%m%d%H%M%S'));
+				$solutionKey = new Google_Service_Calendar_ConferenceSolutionKey();
+				$solutionKey->setType('hangoutsMeet');
+				$createRequest->setConferenceSolutionKey($solutionKey);
+				$conferenceData->setCreateRequest($createRequest);
+				$event->setConferenceData($conferenceData);
+			}
+		}
+
+		$updatedEvent = $service->events->update($login, $neweventid, $event, $updateParams);
 
 		// Print the updated date.
 		//echo $updatedEvent->getUpdated();
